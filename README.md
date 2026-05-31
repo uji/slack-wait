@@ -17,25 +17,6 @@ message object per line—and exits. It never stores state; the caller tracks
 position by saving the latest `ts` and passing it back as `--since` on the
 next invocation.
 
-```
-┌─ agent ──────────────────────────────────────────────────┐
-│  ts = "1748000000.000000"   # last seen message           │
-│                                                           │
-│  loop:                                                    │
-│    msgs = $(slack-wait --channel C… --since $ts)          │
-│    process $msgs                                          │
-│    ts = last ts in $msgs                                  │
-└───────────────────────────────────────────────────────────┘
-```
-
-## Exit codes
-
-| Code | Meaning |
-|------|---------|
-| `0`  | One or more new messages were found and printed |
-| `124`| Timed out with no new messages (matches `coreutils timeout`) |
-| `1`  | Misconfiguration or authentication error |
-
 ## Installation
 
 ### 1. Install the CLI
@@ -159,12 +140,6 @@ slack-wait logout
 ```
 
 Removes the stored token.
-
-### Token rotation
-
-`slack-wait` automatically refreshes the access token using the stored refresh
-token before each run. If the refresh token itself has expired (default: 30
-days of inactivity), you will be prompted to run `slack-wait login` again.
 
 ### Scopes requested
 

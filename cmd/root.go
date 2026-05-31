@@ -74,7 +74,7 @@ func (w *WaitCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&w.since, "since", "", "Slack timestamp; wait for messages strictly newer than this")
 	f.StringVar(&w.thread, "thread", "", "Thread timestamp; poll replies instead of channel history")
 	f.DurationVar(&w.interval, "interval", 5*time.Second, "Polling interval")
-	f.DurationVar(&w.timeout, "timeout", 0, "Maximum wait time before exiting 124 (0 = wait forever)")
+	f.DurationVar(&w.timeout, "timeout", 0, "Maximum wait time before exiting 124 (0,default = wait forever)")
 }
 
 func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
