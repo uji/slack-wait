@@ -42,8 +42,15 @@ func TestValid_Expired(t *testing.T) {
 
 // ---- Save / Load / Delete ----
 
+func isolateConfigDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+}
+
 func TestSaveLoad(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	want := &Token{
 		AccessToken:  "xoxp-access",
@@ -71,7 +78,7 @@ func TestSaveLoad(t *testing.T) {
 }
 
 func TestLoad_Missing(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	_, err := Load()
 	if err != ErrNoToken {
@@ -80,7 +87,7 @@ func TestLoad_Missing(t *testing.T) {
 }
 
 func TestDelete_RemovesFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	if err := Save(&Token{AccessToken: "xoxp-test"}); err != nil {
 		t.Fatal(err)
@@ -95,7 +102,7 @@ func TestDelete_RemovesFile(t *testing.T) {
 }
 
 func TestDelete_Idempotent(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	// Deleting a non-existent file should not return an error.
 	if err := Delete(); err != nil {
@@ -276,7 +283,7 @@ func TestCallTokenEndpoint_InvalidJSON(t *testing.T) {
 // ---- EnsureValid ----
 
 func TestEnsureValid_AlreadyValid(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	stored := &Token{
 		AccessToken:  "xoxp-still-valid",
@@ -302,7 +309,7 @@ func TestEnsureValid_AlreadyValid(t *testing.T) {
 }
 
 func TestEnsureValid_Refreshes(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	expired := &Token{
 		AccessToken:  "xoxp-old",
@@ -340,7 +347,7 @@ func TestEnsureValid_Refreshes(t *testing.T) {
 }
 
 func TestEnsureValid_NoToken(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	_, err := EnsureValid("CLIENT")
 	if err != ErrNoToken {
@@ -349,7 +356,7 @@ func TestEnsureValid_NoToken(t *testing.T) {
 }
 
 func TestEnsureValid_NoRefreshToken(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	// Expired token with no refresh_token.
 	if err := Save(&Token{

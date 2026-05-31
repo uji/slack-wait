@@ -38,15 +38,72 @@ next invocation.
 
 ## Installation
 
+### 1. Install the CLI
+
 ```sh
 go install github.com/uji/slack-wait@latest
 ```
 
-Or build from source with your Client ID embedded (see [Authentication](#authentication)):
+### 2. Create a Slack App
+
+1. Go to https://api.slack.com/apps and click **Create New App** → **From a manifest**
+2. Select your workspace
+3. Paste the following manifest:
+
+```json
+{
+  "display_information": {
+    "name": "Slack Wait"
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "http://localhost:49490/callback",
+      "http://localhost:49491/callback",
+      "http://localhost:49492/callback",
+      "http://localhost:49493/callback",
+      "http://localhost:49494/callback",
+      "http://localhost:49495/callback",
+      "http://localhost:49496/callback",
+      "http://localhost:49497/callback",
+      "http://localhost:49498/callback",
+      "http://localhost:49499/callback"
+    ],
+    "scopes": {
+      "user": [
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history"
+      ]
+    },
+    "pkce_enabled": true
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": true,
+    "is_mcp_enabled": false
+  }
+}
+```
+
+4. Click **Create** and then **Install to Workspace**
+5. On the **Basic Information** page, copy the **Client ID**
+
+### 3. Log in
 
 ```sh
-go build -ldflags "-X github.com/uji/slack-wait/cmd.clientID=YOUR_CLIENT_ID" \
-  -o slack-wait .
+slack-wait login --client-id <YOUR_CLIENT_ID>
+```
+
+A browser window opens to the Slack authorization page. After you click
+**Allow**, the Client ID is saved to `~/.config/slack-wait/config.json` and
+the token is saved to `~/.config/slack-wait/token.json` (both `0600`).
+
+On subsequent runs, `--client-id` can be omitted:
+
+```sh
+slack-wait login
 ```
 
 ## Usage
@@ -93,19 +150,7 @@ full schema.
 
 ## Authentication
 
-`slack-wait` uses **PKCE OAuth 2.0** (RFC 7636) with no `client_secret`. The
-app is registered once by the tool author; end-users only click "Allow" in
-their browser.
-
-### First-time login
-
-```sh
-slack-wait login
-```
-
-A browser window opens to the Slack authorization page. After you allow
-access, the token is saved to `~/.config/slack-wait/token.json` with
-permissions `0600`.
+`slack-wait` uses **PKCE OAuth 2.0** (RFC 7636) with no `client_secret`.
 
 ### Logout
 
@@ -117,10 +162,9 @@ Removes the stored token.
 
 ### Token rotation
 
-When token rotation is enabled on the Slack app, `slack-wait` automatically
-refreshes the access token using the stored refresh token before each run. If
-the refresh token itself has expired (default: 30 days of inactivity), you will
-be prompted to run `slack-wait login` again.
+`slack-wait` automatically refreshes the access token using the stored refresh
+token before each run. If the refresh token itself has expired (default: 30
+days of inactivity), you will be prompted to run `slack-wait login` again.
 
 ### Scopes requested
 
@@ -132,25 +176,6 @@ be prompted to run `slack-wait login` again.
 | `mpim:history` | Group direct messages |
 
 These are **user token** scopes (`xoxp-`). No bot scopes are required.
-
-## Building with your own Client ID
-
-The Slack app's Client ID is baked into the binary at build time. If you are
-distributing your own build, register a Slack app with:
-
-- **Redirect URL**: `http://localhost` (any port; the CLI picks a free port at runtime)
-- **User token scopes**: the four listed above
-- **Token rotation**: enabled (recommended)
-- **No client secret distribution**—this is intentional; PKCE provides the
-  code integrity without needing a secret
-
-Then build:
-
-```sh
-go build \
-  -ldflags "-X github.com/uji/slack-wait/cmd.clientID=<YOUR_CLIENT_ID>" \
-  -o slack-wait .
-```
 
 ## Design notes
 
@@ -177,19 +202,6 @@ slack-wait --channel C… --since $ts | jq -s '.'
 **Future: MCP interface.** The tool is designed so that a thin MCP wrapper
 can expose `slack-wait` as a tool callable by MCP clients without changing
 the core polling logic.
-
-## Development
-
-```sh
-# Run tests
-go test ./...
-
-# Run tests with coverage
-go test -coverprofile=cover.out ./... && go tool cover -html=cover.out
-
-# Vet
-go vet ./...
-```
 
 ## License
 

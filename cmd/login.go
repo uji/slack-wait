@@ -14,25 +14,40 @@ import (
 
 	"github.com/google/subcommands"
 	"github.com/uji/slack-wait/internal/auth"
+	"github.com/uji/slack-wait/internal/config"
 )
 
 // LoginCommand authenticates via browser using PKCE.
-type LoginCommand struct{}
+type LoginCommand struct {
+	clientIDFlag string
+}
 
 func (*LoginCommand) Name() string     { return "login" }
 func (*LoginCommand) Synopsis() string { return "authenticate via browser (PKCE, no client secret)" }
 func (*LoginCommand) Usage() string    { return "login\n\n" }
-func (*LoginCommand) SetFlags(_ *flag.FlagSet) {}
+func (l *LoginCommand) SetFlags(f *flag.FlagSet) {
+	f.StringVar(&l.clientIDFlag, "client-id", "", "Slack App Client ID to save and use for authentication")
+}
 
-func (*LoginCommand) Execute(_ context.Context, _ *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
-	if err := runLogin(); err != nil {
+func (l *LoginCommand) Execute(_ context.Context, _ *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+	if err := runLogin(l.clientIDFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
 		return subcommands.ExitFailure
 	}
 	return subcommands.ExitSuccess
 }
 
-func runLogin() error {
+func runLogin(clientIDArg string) error {
+	if clientIDArg != "" {
+		if err := config.Save(&config.Config{ClientID: clientIDArg}); err != nil {
+			return fmt.Errorf("save client ID: %w", err)
+		}
+	}
+	id, err := resolveClientID()
+	if err != nil {
+		return err
+	}
+
 	verifier, err := auth.GenerateVerifier()
 	if err != nil {
 		return err
@@ -55,7 +70,7 @@ func runLogin() error {
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	authURL := "https://slack.com/oauth/v2/authorize?" + url.Values{
-		"client_id":             {clientID},
+		"client_id":             {id},
 		"scope":                 {""}, // no bot scopes
 		"user_scope":            {userScopes},
 		"redirect_uri":          {redirectURI},
@@ -105,7 +120,7 @@ func runLogin() error {
 	}
 	srv.Shutdown(context.Background()) //nolint:errcheck
 
-	token, err := auth.ExchangeCode(clientID, code, verifier, redirectURI)
+	token, err := auth.ExchangeCode(id, code, verifier, redirectURI)
 	if err != nil {
 		return fmt.Errorf("token exchange failed: %w", err)
 	}

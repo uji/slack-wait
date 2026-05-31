@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/subcommands"
 	"github.com/uji/slack-wait/internal/auth"
+	"github.com/uji/slack-wait/internal/config"
 	"github.com/uji/slack-wait/internal/slack"
 )
 
@@ -27,6 +28,23 @@ const userScopes = "channels:history,groups:history,im:history,mpim:history"
 
 // exitCodeTimeout matches the convention used by GNU coreutils `timeout`.
 const exitCodeTimeout = 124
+
+// resolveClientID returns the client ID to use for OAuth, in priority order:
+// 1. config.json (written by `slack-wait login --client-id`)
+// 2. ldflags-embedded clientID (for self-distributed builds)
+func resolveClientID() (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+	if cfg.ClientID != "" {
+		return cfg.ClientID, nil
+	}
+	if clientID != "" && clientID != "YOUR_SLACK_CLIENT_ID" {
+		return clientID, nil
+	}
+	return "", fmt.Errorf("no Slack client ID configured — run: slack-wait login --client-id <YOUR_CLIENT_ID>")
+}
 
 // WaitCommand waits for new Slack messages and emits them as NDJSON.
 type WaitCommand struct {
@@ -68,7 +86,12 @@ func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface
 	if w.since == "" {
 		w.since = fmt.Sprintf("%.6f", float64(time.Now().UnixNano())/1e9)
 	}
-	token, err := auth.EnsureValid(clientID)
+	id, err := resolveClientID()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
+		return subcommands.ExitFailure
+	}
+	token, err := auth.EnsureValid(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
 		return subcommands.ExitFailure
