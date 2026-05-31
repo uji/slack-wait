@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +90,66 @@ func TestHistoryEmpty(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("expected empty result, got %d messages", len(msgs))
+	}
+}
+
+func TestNew(t *testing.T) {
+	c := New("xoxp-token")
+	if c == nil {
+		t.Fatal("New returned nil")
+	}
+	if c.token != "xoxp-token" {
+		t.Errorf("token: got %q, want xoxp-token", c.token)
+	}
+	if c.baseURL == "" {
+		t.Error("baseURL should be set")
+	}
+	if c.httpClient == nil {
+		t.Error("httpClient should be set")
+	}
+}
+
+func TestHistory_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "channel_not_found"})
+	}))
+	defer srv.Close()
+
+	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := c.History("C_MISSING", "1700000000.000000")
+	if err == nil {
+		t.Fatal("expected error for API error response")
+	}
+	if !strings.Contains(err.Error(), "channel_not_found") {
+		t.Errorf("error should mention channel_not_found; got %v", err)
+	}
+}
+
+func TestHistory_InvalidJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("not json")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := c.History("C123", "1700000000.000000")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+}
+
+func TestReplies_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "thread_not_found"})
+	}))
+	defer srv.Close()
+
+	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := c.Replies("C123", "1700000000.000000", "1700000001.000000")
+	if err == nil {
+		t.Fatal("expected error for API error response")
+	}
+	if !strings.Contains(err.Error(), "thread_not_found") {
+		t.Errorf("error should mention thread_not_found; got %v", err)
 	}
 }

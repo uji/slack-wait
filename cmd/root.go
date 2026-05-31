@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -64,56 +65,63 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	if flagChannel == "" || flagSince == "" {
 		return cmd.Help()
 	}
-
 	token, err := auth.EnsureValid(clientID)
 	if err != nil {
 		return err
 	}
-
 	client := slack.New(token.AccessToken)
-
 	fetch := func() ([]json.RawMessage, error) {
 		if flagThread != "" {
 			return client.Replies(flagChannel, flagThread, flagSince)
 		}
 		return client.History(flagChannel, flagSince)
 	}
+	if code := pollLoop(fetch, flagInterval, flagTimeout, os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
+	}
+	return nil
+}
 
+// pollLoop is the testable core of the wait command.
+// It polls fetch immediately and then on each interval tick.
+// Returns 0 when messages are found, exitCodeTimeout on timeout.
+func pollLoop(
+	fetch func() ([]json.RawMessage, error),
+	interval, timeout time.Duration,
+	stdout, stderr io.Writer,
+) int {
 	emit := func(msgs []json.RawMessage) {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		for _, m := range msgs {
-			enc.Encode(m) //nolint:errcheck — stdout write failures are fatal anyway
+			enc.Encode(m) //nolint:errcheck
 		}
 	}
 
-	// Immediate first poll to avoid waiting a full interval when messages
-	// are already available.
+	// Immediate first poll: avoid waiting a full interval when messages are ready.
 	if msgs, err := fetch(); err != nil {
-		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
+		fmt.Fprintf(stderr, "slack-wait: %v\n", err)
 	} else if len(msgs) > 0 {
 		emit(msgs)
-		return nil
+		return 0
 	}
 
-	timeoutCh := time.After(flagTimeout)
-	ticker := time.NewTicker(flagInterval)
+	timeoutCh := time.After(timeout)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-timeoutCh:
-			os.Exit(exitCodeTimeout)
-
+			return exitCodeTimeout
 		case <-ticker.C:
 			msgs, err := fetch()
 			if err != nil {
-				// Log transient errors but keep polling.
-				fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
+				fmt.Fprintf(stderr, "slack-wait: %v\n", err)
 				continue
 			}
 			if len(msgs) > 0 {
 				emit(msgs)
-				return nil
+				return 0
 			}
 		}
 	}

@@ -140,8 +140,11 @@ func Refresh(clientID, refreshToken string) (*Token, error) {
 	})
 }
 
+// oauthBaseURL is the Slack API base; overridden in tests to point at a mock server.
+var oauthBaseURL = "https://slack.com"
+
 func callTokenEndpoint(params url.Values) (*Token, error) {
-	resp, err := http.PostForm("https://slack.com/api/oauth.v2.access", params)
+	resp, err := http.PostForm(oauthBaseURL+"/api/oauth.v2.access", params)
 	if err != nil {
 		return nil, err
 	}
