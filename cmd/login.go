@@ -29,7 +29,7 @@ func (l *LoginCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&l.clientIDFlag, "client-id", "", "Slack App Client ID to save and use for authentication")
 }
 
-func (l *LoginCommand) Execute(_ context.Context, _ *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+func (l *LoginCommand) Execute(_ context.Context, _ *flag.FlagSet, _ ...any) subcommands.ExitStatus {
 	if err := runLogin(l.clientIDFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
 		return subcommands.ExitFailure

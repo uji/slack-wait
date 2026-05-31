@@ -77,7 +77,7 @@ func (w *WaitCommand) SetFlags(f *flag.FlagSet) {
 	f.DurationVar(&w.timeout, "timeout", 0, "Maximum wait time before exiting 124 (0,default = wait forever)")
 }
 
-func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subcommands.ExitStatus {
 	if w.channel == "" {
 		fmt.Fprint(os.Stderr, w.Usage())
 		f.PrintDefaults()
