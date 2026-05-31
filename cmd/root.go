@@ -52,7 +52,7 @@ func init() {
 	f.StringVar(&flagSince, "since", "", "Slack timestamp; wait for messages strictly newer than this (required)")
 	f.StringVar(&flagThread, "thread", "", "Thread timestamp; poll replies instead of channel history")
 	f.DurationVar(&flagInterval, "interval", 5*time.Second, "Polling interval")
-	f.DurationVar(&flagTimeout, "timeout", 5*time.Minute, "Maximum wait time before exiting 124")
+	f.DurationVar(&flagTimeout, "timeout", 0, "Maximum wait time before exiting 124 (0 = wait forever)")
 }
 
 func Execute() {
@@ -62,8 +62,11 @@ func Execute() {
 }
 
 func runWait(cmd *cobra.Command, _ []string) error {
-	if flagChannel == "" || flagSince == "" {
+	if flagChannel == "" {
 		return cmd.Help()
+	}
+	if flagSince == "" {
+		flagSince = fmt.Sprintf("%.6f", float64(time.Now().UnixNano())/1e9)
 	}
 	token, err := auth.EnsureValid(clientID)
 	if err != nil {
@@ -105,7 +108,11 @@ func pollLoop(
 		return 0
 	}
 
-	timeoutCh := time.After(timeout)
+	// A nil channel blocks forever in select, giving us infinite-wait when timeout==0.
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timeoutCh = time.After(timeout)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
