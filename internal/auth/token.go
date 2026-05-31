@@ -20,8 +20,8 @@ type Token struct {
 }
 
 var (
-	ErrNoToken      = errors.New("not authenticated; run 'slack-wait auth login'")
-	ErrTokenExpired = errors.New("refresh token expired; run 'slack-wait auth login'")
+	ErrNoToken      = errors.New("not authenticated; run 'slack-wait login'")
+	ErrTokenExpired = errors.New("refresh token expired; run 'slack-wait login'")
 )
 
 func tokenPath() (string, error) {

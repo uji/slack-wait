@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,34 +12,27 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/google/subcommands"
 	"github.com/uji/slack-wait/internal/auth"
 )
 
-var authCmd = &cobra.Command{
-	Use:   "auth",
-	Short: "Manage Slack authentication",
+// LoginCommand authenticates via browser using PKCE.
+type LoginCommand struct{}
+
+func (*LoginCommand) Name() string     { return "login" }
+func (*LoginCommand) Synopsis() string { return "authenticate via browser (PKCE, no client secret)" }
+func (*LoginCommand) Usage() string    { return "login\n\n" }
+func (*LoginCommand) SetFlags(_ *flag.FlagSet) {}
+
+func (*LoginCommand) Execute(_ context.Context, _ *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+	if err := runLogin(); err != nil {
+		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
+		return subcommands.ExitFailure
+	}
+	return subcommands.ExitSuccess
 }
 
-var authLoginCmd = &cobra.Command{
-	Use:          "login",
-	Short:        "Authenticate via browser (PKCE, no client secret)",
-	SilenceUsage: true,
-	RunE:         runAuthLogin,
-}
-
-var authLogoutCmd = &cobra.Command{
-	Use:          "logout",
-	Short:        "Remove stored token",
-	SilenceUsage: true,
-	RunE:         runAuthLogout,
-}
-
-func init() {
-	authCmd.AddCommand(authLoginCmd, authLogoutCmd)
-}
-
-func runAuthLogin(_ *cobra.Command, _ []string) error {
+func runLogin() error {
 	verifier, err := auth.GenerateVerifier()
 	if err != nil {
 		return err
@@ -119,14 +113,6 @@ func runAuthLogin(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("save token: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "Authenticated. Token saved to ~/.config/slack-wait/token.json")
-	return nil
-}
-
-func runAuthLogout(_ *cobra.Command, _ []string) error {
-	if err := auth.Delete(); err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stderr, "Logged out.")
 	return nil
 }
 

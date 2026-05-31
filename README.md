@@ -100,7 +100,7 @@ their browser.
 ### First-time login
 
 ```sh
-slack-wait auth login
+slack-wait login
 ```
 
 A browser window opens to the Slack authorization page. After you allow
@@ -110,7 +110,7 @@ permissions `0600`.
 ### Logout
 
 ```sh
-slack-wait auth logout
+slack-wait logout
 ```
 
 Removes the stored token.
@@ -120,7 +120,7 @@ Removes the stored token.
 When token rotation is enabled on the Slack app, `slack-wait` automatically
 refreshes the access token using the stored refresh token before each run. If
 the refresh token itself has expired (default: 30 days of inactivity), you will
-be prompted to run `auth login` again.
+be prompted to run `slack-wait login` again.
 
 ### Scopes requested
 

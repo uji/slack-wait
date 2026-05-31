@@ -1,13 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/google/subcommands"
 	"github.com/uji/slack-wait/internal/auth"
 	"github.com/uji/slack-wait/internal/slack"
 )
@@ -26,63 +28,62 @@ const userScopes = "channels:history,groups:history,im:history,mpim:history"
 // exitCodeTimeout matches the convention used by GNU coreutils `timeout`.
 const exitCodeTimeout = 124
 
-var (
-	flagChannel  string
-	flagSince    string
-	flagThread   string
-	flagInterval time.Duration
-	flagTimeout  time.Duration
-)
+// WaitCommand waits for new Slack messages and emits them as NDJSON.
+type WaitCommand struct {
+	channel  string
+	since    string
+	thread   string
+	interval time.Duration
+	timeout  time.Duration
+}
 
-var rootCmd = &cobra.Command{
-	Use:   "slack-wait",
-	Short: "Wait for new Slack messages and emit them as NDJSON",
-	Long: `slack-wait polls a Slack channel (or thread) for messages newer than --since.
+func (*WaitCommand) Name() string { return "wait" }
+func (*WaitCommand) Synopsis() string {
+	return "wait for new Slack messages and emit them as NDJSON"
+}
+func (*WaitCommand) Usage() string {
+	return `wait --channel <ID> [--since <ts>] [--thread <ts>] [--interval <dur>] [--timeout <dur>]
+
+Polls a Slack channel (or thread) for messages newer than --since.
 When at least one new message arrives it prints all of them as NDJSON and exits 0.
-On timeout it exits 124. No state is stored; the caller tracks position via --since.`,
-	SilenceUsage: true,
-	RunE:         runWait,
+On timeout it exits 124. No state is stored; the caller tracks position via --since.
+
+`
 }
 
-func init() {
-	rootCmd.AddCommand(authCmd)
-
-	f := rootCmd.Flags()
-	f.StringVar(&flagChannel, "channel", "", "Slack channel ID, e.g. C01234ABCDE (required)")
-	f.StringVar(&flagSince, "since", "", "Slack timestamp; wait for messages strictly newer than this (required)")
-	f.StringVar(&flagThread, "thread", "", "Thread timestamp; poll replies instead of channel history")
-	f.DurationVar(&flagInterval, "interval", 5*time.Second, "Polling interval")
-	f.DurationVar(&flagTimeout, "timeout", 0, "Maximum wait time before exiting 124 (0 = wait forever)")
+func (w *WaitCommand) SetFlags(f *flag.FlagSet) {
+	f.StringVar(&w.channel, "channel", "", "Slack channel ID, e.g. C01234ABCDE (required)")
+	f.StringVar(&w.since, "since", "", "Slack timestamp; wait for messages strictly newer than this")
+	f.StringVar(&w.thread, "thread", "", "Thread timestamp; poll replies instead of channel history")
+	f.DurationVar(&w.interval, "interval", 5*time.Second, "Polling interval")
+	f.DurationVar(&w.timeout, "timeout", 0, "Maximum wait time before exiting 124 (0 = wait forever)")
 }
 
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+	if w.channel == "" {
+		fmt.Fprint(os.Stderr, w.Usage())
+		f.PrintDefaults()
+		return subcommands.ExitUsageError
 	}
-}
-
-func runWait(cmd *cobra.Command, _ []string) error {
-	if flagChannel == "" {
-		return cmd.Help()
-	}
-	if flagSince == "" {
-		flagSince = fmt.Sprintf("%.6f", float64(time.Now().UnixNano())/1e9)
+	if w.since == "" {
+		w.since = fmt.Sprintf("%.6f", float64(time.Now().UnixNano())/1e9)
 	}
 	token, err := auth.EnsureValid(clientID)
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
+		return subcommands.ExitFailure
 	}
 	client := slack.New(token.AccessToken)
 	fetch := func() ([]json.RawMessage, error) {
-		if flagThread != "" {
-			return client.Replies(flagChannel, flagThread, flagSince)
+		if w.thread != "" {
+			return client.Replies(w.channel, w.thread, w.since)
 		}
-		return client.History(flagChannel, flagSince)
+		return client.History(w.channel, w.since)
 	}
-	if code := pollLoop(fetch, flagInterval, flagTimeout, os.Stdout, os.Stderr); code != 0 {
+	if code := pollLoop(fetch, w.interval, w.timeout, os.Stdout, os.Stderr); code != 0 {
 		os.Exit(code)
 	}
-	return nil
+	return subcommands.ExitSuccess
 }
 
 // pollLoop is the testable core of the wait command.
