@@ -50,7 +50,7 @@ func resolveClientID() (string, error) {
 type WaitCommand struct {
 	channel  string
 	since    string
-	thread   string
+	thread_ts string
 	interval time.Duration
 	timeout  time.Duration
 }
@@ -60,7 +60,7 @@ func (*WaitCommand) Synopsis() string {
 	return "wait for new Slack messages and emit them as NDJSON"
 }
 func (*WaitCommand) Usage() string {
-	return `wait --channel <ID> [--since <ts>] [--thread <ts>] [--interval <dur>] [--timeout <dur>]
+	return `slack-wait --channel <ID> [--since <ts>] [--thread_ts <ts>] [--interval <dur>] [--timeout <dur>]
 
 Polls a Slack channel (or thread) for messages newer than --since.
 When at least one new message arrives it prints all of them as NDJSON and exits 0.
@@ -72,7 +72,7 @@ On timeout it exits 124. No state is stored; the caller tracks position via --si
 func (w *WaitCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&w.channel, "channel", "", "Slack channel ID, e.g. C01234ABCDE (required)")
 	f.StringVar(&w.since, "since", "", "Slack timestamp; wait for messages strictly newer than this")
-	f.StringVar(&w.thread, "thread", "", "Thread timestamp; poll replies instead of channel history")
+	f.StringVar(&w.thread_ts, "thread_ts", "", "Thread timestamp; poll replies instead of channel history")
 	f.DurationVar(&w.interval, "interval", 5*time.Second, "Polling interval")
 	f.DurationVar(&w.timeout, "timeout", 0, "Maximum wait time before exiting 124 (0,default = wait forever)")
 }
@@ -98,8 +98,8 @@ func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subc
 	}
 	client := slack.New(token.AccessToken)
 	fetch := func() ([]json.RawMessage, error) {
-		if w.thread != "" {
-			return client.Replies(w.channel, w.thread, w.since)
+		if w.thread_ts != "" {
+			return client.Replies(w.channel, w.thread_ts, w.since)
 		}
 		return client.History(w.channel, w.since)
 	}
