@@ -45,10 +45,17 @@ func runAuthLogin(_ *cobra.Command, _ []string) error {
 	}
 	challenge := auth.Challenge(verifier)
 
-	// Grab a free port without a race: keep the listener and pass it to Serve.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("cannot open local port: %w", err)
+	// Try ports 49490-49499 in order; all must be registered in the Slack app's redirect URIs.
+	var ln net.Listener
+	for p := 49490; p <= 49499; p++ {
+		var err error
+		ln, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err == nil {
+			break
+		}
+		if p == 49499 {
+			return fmt.Errorf("cannot open local port (tried 49490-49499): %w", err)
+		}
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
