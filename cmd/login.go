@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"net"
@@ -54,6 +55,11 @@ func runLogin(clientIDArg string) error {
 	}
 	challenge := auth.Challenge(verifier)
 
+	state, err := auth.GenerateVerifier()
+	if err != nil {
+		return err
+	}
+
 	// Try ports 49490-49499 in order; all must be registered in the Slack app's redirect URIs.
 	var ln net.Listener
 	for p := 49490; p <= 49499; p++ {
@@ -76,6 +82,7 @@ func runLogin(clientIDArg string) error {
 		"redirect_uri":          {redirectURI},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
+		"state":                 {state},
 	}.Encode()
 
 	codeCh := make(chan string, 1)
@@ -85,13 +92,29 @@ func runLogin(clientIDArg string) error {
 	srv := &http.Server{Handler: mux}
 
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		if e := r.URL.Query().Get("error"); e != "" {
+		host, _, _ := net.SplitHostPort(r.Host)
+		if host != "127.0.0.1" && host != "localhost" {
+			http.Error(w, "invalid host", http.StatusBadRequest)
+			return
+		}
+		q := r.URL.Query()
+		if e := q.Get("error"); e != "" {
 			fmt.Fprintf(w, "Authentication failed: %s. You can close this window.", e)
 			errCh <- fmt.Errorf("auth denied: %s", e)
 			return
 		}
+		if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 {
+			http.Error(w, "state mismatch", http.StatusBadRequest)
+			errCh <- fmt.Errorf("state mismatch (possible CSRF)")
+			return
+		}
+		code := q.Get("code")
+		if code == "" {
+			http.Error(w, "missing code", http.StatusBadRequest)
+			return
+		}
 		fmt.Fprint(w, "Authentication successful! You can close this window.")
-		codeCh <- r.URL.Query().Get("code")
+		codeCh <- code
 	})
 
 	go func() {
