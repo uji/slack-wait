@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/google/subcommands"
 	"github.com/uji/slack-wait/cmd"
@@ -17,9 +18,35 @@ var (
 	date    = "unknown"
 )
 
+// versionInfo returns build information, falling back to the embedded module
+// metadata (set by `go install module@version`) when ldflags were not provided.
+func versionInfo() (v, c, d string) {
+	v, c, d = version, commit, date
+	if v != "dev" {
+		return v, c, d
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return v, c, d
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		v = info.Main.Version
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			c = s.Value
+		case "vcs.time":
+			d = s.Value
+		}
+	}
+	return v, c, d
+}
+
 func main() {
 	if len(os.Args) >= 2 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("slack-wait %s (commit %s, built %s)\n", version, commit, date)
+		v, c, d := versionInfo()
+		fmt.Printf("slack-wait %s (commit %s, built %s)\n", v, c, d)
 		os.Exit(0)
 	}
 
