@@ -21,9 +21,19 @@ next invocation.
 
 ### 1. Install the CLI
 
+With `go install`:
+
 ```sh
 go install github.com/uji/slack-wait@latest
 ```
+
+With Homebrew:
+
+```sh
+brew install uji/tap/slack-wait
+```
+
+Or download a prebuilt binary from the [releases page](https://github.com/uji/slack-wait/releases).
 
 ### 2. Create a Slack App
 
