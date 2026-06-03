@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +42,14 @@ func TestValid_Expired(t *testing.T) {
 	}
 }
 
+func TestValid_EmptyAccessToken(t *testing.T) {
+	// A freshly loaded rotating token has no access token; it must refresh.
+	tok := &Token{RefreshToken: "xoxe-rt"}
+	if tok.Valid() {
+		t.Error("token with empty AccessToken should not be valid")
+	}
+}
+
 // ---- Save / Load / Delete ----
 
 func isolateConfigDir(t *testing.T) {
@@ -49,16 +59,16 @@ func isolateConfigDir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 }
 
-func TestSaveLoad(t *testing.T) {
+func TestSaveLoad_Rotating(t *testing.T) {
 	isolateConfigDir(t)
 
-	want := &Token{
+	// A rotating token: the access token and expiry are kept in memory only,
+	// so Save must persist only the refresh token.
+	if err := Save(&Token{
 		AccessToken:  "xoxp-access",
 		RefreshToken: "xoxe-refresh",
-		// Truncate to second so JSON round-trip matches exactly.
-		ExpiresAt: time.Now().Add(1 * time.Hour).Truncate(time.Second),
-	}
-	if err := Save(want); err != nil {
+		ExpiresAt:    time.Now().Add(1 * time.Hour),
+	}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -66,14 +76,59 @@ func TestSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.AccessToken != want.AccessToken {
-		t.Errorf("AccessToken: got %q, want %q", got.AccessToken, want.AccessToken)
+	if got.AccessToken != "" {
+		t.Errorf("AccessToken should not be persisted for rotating tokens; got %q", got.AccessToken)
 	}
-	if got.RefreshToken != want.RefreshToken {
-		t.Errorf("RefreshToken: got %q, want %q", got.RefreshToken, want.RefreshToken)
+	if got.RefreshToken != "xoxe-refresh" {
+		t.Errorf("RefreshToken: got %q, want xoxe-refresh", got.RefreshToken)
 	}
-	if !got.ExpiresAt.Equal(want.ExpiresAt) {
-		t.Errorf("ExpiresAt: got %v, want %v", got.ExpiresAt, want.ExpiresAt)
+	if !got.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt should not be persisted; got %v", got.ExpiresAt)
+	}
+}
+
+func TestSaveLoad_NonRotating(t *testing.T) {
+	isolateConfigDir(t)
+
+	// No refresh token (token rotation disabled): the access token is the only
+	// credential and never expires, so it must be persisted.
+	if err := Save(&Token{AccessToken: "xoxp-access"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.AccessToken != "xoxp-access" {
+		t.Errorf("AccessToken: got %q, want xoxp-access", got.AccessToken)
+	}
+	if got.RefreshToken != "" {
+		t.Errorf("RefreshToken: got %q, want empty", got.RefreshToken)
+	}
+}
+
+func TestSaveDoesNotWriteAccessToken(t *testing.T) {
+	isolateConfigDir(t)
+
+	if err := Save(&Token{
+		AccessToken:  "xoxp-secret",
+		RefreshToken: "xoxe-refresh",
+		ExpiresAt:    time.Now().Add(1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	p, err := tokenPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "xoxp-secret") {
+		t.Errorf("access token must not be written to disk; file contents: %s", raw)
 	}
 }
 
@@ -280,45 +335,34 @@ func TestCallTokenEndpoint_InvalidJSON(t *testing.T) {
 	}
 }
 
-// ---- EnsureValid ----
+// ---- Session ----
 
-func TestEnsureValid_AlreadyValid(t *testing.T) {
-	isolateConfigDir(t)
-
-	stored := &Token{
-		AccessToken:  "xoxp-still-valid",
-		RefreshToken: "xoxe-rt",
-		ExpiresAt:    time.Now().Add(1 * time.Hour),
+func TestSession_AlreadyValid(t *testing.T) {
+	// A still-valid in-memory access token is returned without contacting Slack.
+	s := &Session{
+		clientID: "CLIENT",
+		token: &Token{
+			AccessToken:  "xoxp-still-valid",
+			RefreshToken: "xoxe-rt",
+			ExpiresAt:    time.Now().Add(1 * time.Hour),
+		},
 	}
-	if err := Save(stored); err != nil {
-		t.Fatal(err)
-	}
 
-	// Point OAuth at an unreachable address — EnsureValid must not call it.
 	orig := oauthBaseURL
-	oauthBaseURL = "http://127.0.0.1:1" // closed port
+	oauthBaseURL = "http://127.0.0.1:1" // closed port — must not be called
 	defer func() { oauthBaseURL = orig }()
 
-	tok, err := EnsureValid("CLIENT")
+	tok, err := s.Token()
 	if err != nil {
-		t.Fatalf("EnsureValid: %v", err)
+		t.Fatalf("Token: %v", err)
 	}
-	if tok.AccessToken != "xoxp-still-valid" {
-		t.Errorf("AccessToken: got %q, want xoxp-still-valid", tok.AccessToken)
+	if tok != "xoxp-still-valid" {
+		t.Errorf("token: got %q, want xoxp-still-valid", tok)
 	}
 }
 
-func TestEnsureValid_Refreshes(t *testing.T) {
+func TestSession_RefreshesExpired(t *testing.T) {
 	isolateConfigDir(t)
-
-	expired := &Token{
-		AccessToken:  "xoxp-old",
-		RefreshToken: "xoxe-old-rt",
-		ExpiresAt:    time.Now().Add(-1 * time.Hour),
-	}
-	if err := Save(expired); err != nil {
-		t.Fatal(err)
-	}
 
 	srv := mockTokenServer(t, map[string]any{
 		"ok":            true,
@@ -328,45 +372,89 @@ func TestEnsureValid_Refreshes(t *testing.T) {
 	})
 	withMockOAuth(t, srv)
 
-	tok, err := EnsureValid("CLIENT")
-	if err != nil {
-		t.Fatalf("EnsureValid: %v", err)
-	}
-	if tok.AccessToken != "xoxe.xoxp-refreshed" {
-		t.Errorf("AccessToken: got %q, want xoxe.xoxp-refreshed", tok.AccessToken)
+	s := &Session{
+		clientID: "CLIENT",
+		token: &Token{
+			AccessToken:  "xoxp-old",
+			RefreshToken: "xoxe-old-rt",
+			ExpiresAt:    time.Now().Add(-1 * time.Hour),
+		},
 	}
 
-	// Verify the refreshed token was persisted.
-	persisted, err := Load()
+	tok, err := s.Token()
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if tok != "xoxe.xoxp-refreshed" {
+		t.Errorf("token: got %q, want xoxe.xoxp-refreshed", tok)
+	}
+
+	// The rotated refresh token must be persisted; the access token must not.
+	stored, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.AccessToken != "xoxe.xoxp-refreshed" {
-		t.Error("refreshed token should be persisted to disk")
+	if stored.RefreshToken != "xoxe-new-rt" {
+		t.Errorf("persisted RefreshToken: got %q, want xoxe-new-rt", stored.RefreshToken)
+	}
+	if stored.AccessToken != "" {
+		t.Errorf("access token must not be persisted; got %q", stored.AccessToken)
 	}
 }
 
-func TestEnsureValid_NoToken(t *testing.T) {
+func TestSession_RefreshesWhenAccessTokenEmpty(t *testing.T) {
 	isolateConfigDir(t)
 
-	_, err := EnsureValid("CLIENT")
+	// Simulate a fresh start: only the refresh token is on disk.
+	if err := Save(&Token{
+		AccessToken:  "xoxp-not-persisted",
+		RefreshToken: "xoxe-rt",
+		ExpiresAt:    time.Now().Add(1 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := mockTokenServer(t, map[string]any{
+		"ok":            true,
+		"access_token":  "xoxe.xoxp-fresh",
+		"refresh_token": "xoxe-new-rt",
+		"expires_in":    43200,
+	})
+	withMockOAuth(t, srv)
+
+	s, err := NewSession("CLIENT")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	tok, err := s.Token()
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if tok != "xoxe.xoxp-fresh" {
+		t.Errorf("token: got %q, want xoxe.xoxp-fresh", tok)
+	}
+}
+
+func TestNewSession_NoToken(t *testing.T) {
+	isolateConfigDir(t)
+
+	_, err := NewSession("CLIENT")
 	if err != ErrNoToken {
 		t.Fatalf("want ErrNoToken, got %v", err)
 	}
 }
 
-func TestEnsureValid_NoRefreshToken(t *testing.T) {
-	isolateConfigDir(t)
-
-	// Expired token with no refresh_token.
-	if err := Save(&Token{
-		AccessToken: "xoxp-expired",
-		ExpiresAt:   time.Now().Add(-1 * time.Hour),
-	}); err != nil {
-		t.Fatal(err)
+func TestSession_NoRefreshToken(t *testing.T) {
+	// Expired access token with no refresh token cannot be refreshed.
+	s := &Session{
+		clientID: "CLIENT",
+		token: &Token{
+			AccessToken: "xoxp-expired",
+			ExpiresAt:   time.Now().Add(-1 * time.Hour),
+		},
 	}
 
-	_, err := EnsureValid("CLIENT")
+	_, err := s.Token()
 	if err != ErrTokenExpired {
 		t.Fatalf("want ErrTokenExpired, got %v", err)
 	}

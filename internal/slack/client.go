@@ -11,15 +11,19 @@ import (
 )
 
 // Client wraps Slack Web API calls with a user token.
+//
+// The token is supplied through tokenFunc, called once per request, so a
+// long-running caller can transparently refresh an expiring access token
+// between polls without rebuilding the client.
 type Client struct {
-	token      string
+	tokenFunc  func() (string, error)
 	httpClient *http.Client
 	baseURL    string // override in tests; default is https://slack.com/api
 }
 
-func New(token string) *Client {
+func New(tokenFunc func() (string, error)) *Client {
 	return &Client{
-		token:      token,
+		tokenFunc:  tokenFunc,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		baseURL:    "https://slack.com/api",
 	}
@@ -32,11 +36,15 @@ type apiResp struct {
 }
 
 func (c *Client) get(method string, params url.Values) ([]json.RawMessage, error) {
+	token, err := c.tokenFunc()
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest("GET", c.baseURL+"/"+method+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

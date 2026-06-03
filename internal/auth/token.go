@@ -9,14 +9,31 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
-// Token holds the Slack OAuth credentials persisted to disk.
+// Token holds the Slack OAuth credentials. The access token and its expiry are
+// kept in process memory only; see persisted for what is actually written to
+// disk.
 type Token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// persisted is the on-disk representation of a Token.
+//
+// For rotating apps (token_rotation_enabled) the short-lived access token is
+// deliberately NOT written to disk: it lives only in process memory and is
+// recreated from the refresh token on the next run. Only the long-lived,
+// rotating refresh token is persisted.
+//
+// For non-rotating apps there is no refresh token and the access token never
+// expires, so it is the only credential available and must be stored.
+type persisted struct {
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 var (
@@ -45,11 +62,14 @@ func Load() (*Token, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var t Token
-	if err := json.NewDecoder(f).Decode(&t); err != nil {
+	var p2 persisted
+	if err := json.NewDecoder(f).Decode(&p2); err != nil {
 		return nil, fmt.Errorf("corrupt token file: %w", err)
 	}
-	return &t, nil
+	// ExpiresAt is intentionally left zero: it describes the in-memory access
+	// token, which is never persisted for rotating apps. A loaded rotating
+	// token therefore has an empty AccessToken and is refreshed on first use.
+	return &Token{AccessToken: p2.AccessToken, RefreshToken: p2.RefreshToken}, nil
 }
 
 func Save(t *Token) error {
@@ -60,13 +80,20 @@ func Save(t *Token) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
+	// Keep the access token out of the file for rotating apps; persist it only
+	// when there is no refresh token (non-rotating app), where it is the sole
+	// credential.
+	pt := persisted{RefreshToken: t.RefreshToken}
+	if t.RefreshToken == "" {
+		pt.AccessToken = t.AccessToken
+	}
 	// 0600: owner read/write only
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return json.NewEncoder(f).Encode(t)
+	return json.NewEncoder(f).Encode(pt)
 }
 
 func Delete() error {
@@ -81,9 +108,14 @@ func Delete() error {
 	return err
 }
 
-// Valid reports whether the access token is usable (not expiring within 5 minutes).
-// A zero ExpiresAt means the token has no known expiry (non-rotating app).
+// Valid reports whether the access token is usable (present and not expiring
+// within 5 minutes). A zero ExpiresAt means the token has no known expiry
+// (non-rotating app). An empty AccessToken is never valid — this is the state
+// of a freshly loaded rotating token, which must be refreshed before use.
 func (t *Token) Valid() bool {
+	if t.AccessToken == "" {
+		return false
+	}
 	if t.ExpiresAt.IsZero() {
 		return true
 	}
@@ -166,24 +198,46 @@ func callTokenEndpoint(params url.Values) (*Token, error) {
 	return r.toToken(), nil
 }
 
-// EnsureValid loads the stored token, refreshes it if needed, and returns it.
-func EnsureValid(clientID string) (*Token, error) {
+// Session keeps the active token in process memory and refreshes it on demand.
+// The access token never touches disk for rotating apps; only the rotating
+// refresh token is persisted, so a long-running `wait` can keep refreshing the
+// access token transparently while it waits.
+type Session struct {
+	clientID string
+	mu       sync.Mutex
+	token    *Token
+}
+
+// NewSession loads the stored credentials and prepares an in-memory session.
+func NewSession(clientID string) (*Session, error) {
 	t, err := Load()
 	if err != nil {
 		return nil, err
 	}
-	if t.Valid() {
-		return t, nil
+	return &Session{clientID: clientID, token: t}, nil
+}
+
+// Token returns a currently-valid access token, refreshing transparently when
+// the cached one is missing or close to expiry. The rotated refresh token is
+// persisted on every refresh so the next run can authenticate without a
+// browser. Safe for concurrent use.
+func (s *Session) Token() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.token.Valid() {
+		return s.token.AccessToken, nil
 	}
-	if t.RefreshToken == "" {
-		return nil, ErrTokenExpired
+	if s.token.RefreshToken == "" {
+		return "", ErrTokenExpired
 	}
-	t, err = Refresh(clientID, t.RefreshToken)
+	t, err := Refresh(s.clientID, s.token.RefreshToken)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
+	s.token = t
 	if err := Save(t); err != nil {
-		return nil, err
+		return "", err
 	}
-	return t, nil
+	return t.AccessToken, nil
 }

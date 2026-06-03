@@ -91,12 +91,15 @@ func (w *WaitCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subc
 		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
 		return subcommands.ExitFailure
 	}
-	token, err := auth.EnsureValid(id)
+	// A Session keeps the access token in memory and refreshes it on demand.
+	// The slack client asks it for a token before every request, so a long
+	// wait survives access-token expiry without re-running login.
+	session, err := auth.NewSession(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slack-wait: %v\n", err)
 		return subcommands.ExitFailure
 	}
-	client := slack.New(token.AccessToken)
+	client := slack.New(session.Token)
 	fetch := func() ([]json.RawMessage, error) {
 		if w.thread_ts != "" {
 			return client.Replies(w.channel, w.thread_ts, w.since)
