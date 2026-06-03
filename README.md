@@ -89,11 +89,12 @@ slack-wait login --client-id <YOUR_CLIENT_ID>
 
 A browser window opens to the Slack authorization page. After you click
 **Allow**, the Client ID is saved to `~/.config/slack-wait/config.json` and
-the credentials to `~/.config/slack-wait/token.json` (both `0600`).
+the credentials are stored in the OS keyring (macOS Keychain, Linux
+SecretService, Windows Credential Manager).
 
 When token rotation is enabled, only the long-lived **refresh token** is
-written to disk; the short-lived **access token** is kept in process memory and
-is recreated from the refresh token each run (see [Design notes](#design-notes)).
+stored in the keyring; the short-lived **access token** is kept in process
+memory and is recreated from the refresh token each run (see [Design notes](#design-notes)).
 
 On subsequent runs, `--client-id` can be omitted:
 
@@ -189,12 +190,12 @@ slack-wait --channel C… --since $ts | jq -s '.'
 ```
 
 **Access tokens stay in memory.** With token rotation enabled, the access
-token is never persisted: only the rotating refresh token is stored on disk.
-During a long `wait`, the access token is refreshed transparently before it
-expires, so even an open-ended wait (`--timeout 0`) keeps working past the
-access token's lifetime without re-running `login`. (Non-rotating apps have no
-refresh token, so their long-lived access token is the only credential and is
-stored on disk.)
+token is never persisted: only the rotating refresh token is stored in the OS
+keyring. During a long `wait`, the access token is refreshed transparently
+before it expires, so even an open-ended wait (`--timeout 0`) keeps working
+past the access token's lifetime without re-running `login`. (Non-rotating
+apps have no refresh token, so their long-lived access token is the only
+credential and is stored in the keyring.)
 
 **Future: MCP interface.** The tool is designed so that a thin MCP wrapper
 can expose `slack-wait` as a tool callable by MCP clients without changing
