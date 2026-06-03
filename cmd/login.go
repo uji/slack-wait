@@ -150,7 +150,7 @@ func runLogin(clientIDArg string) error {
 	if err := auth.Save(token); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "Authenticated. Token saved to ~/.config/slack-wait/token.json")
+	fmt.Fprintln(os.Stderr, "Authenticated. Token saved to the OS keyring.")
 	return nil
 }
 
