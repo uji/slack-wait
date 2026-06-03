@@ -2,6 +2,7 @@ package slack
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,11 @@ func makeMsg(ts string) json.RawMessage {
 	return json.RawMessage(b)
 }
 
+// staticToken returns a tokenFunc that always yields the same token.
+func staticToken(s string) func() (string, error) {
+	return func() (string, error) { return s, nil }
+}
+
 func newTestClient(t *testing.T, msgs []json.RawMessage) (*Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -22,7 +28,7 @@ func newTestClient(t *testing.T, msgs []json.RawMessage) (*Client, *httptest.Ser
 		})
 	}))
 	c := &Client{
-		token:      "xoxp-test",
+		tokenFunc:  staticToken("xoxp-test"),
 		httpClient: srv.Client(),
 		baseURL:    srv.URL,
 	}
@@ -94,12 +100,15 @@ func TestHistoryEmpty(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	c := New("xoxp-token")
+	c := New(staticToken("xoxp-token"))
 	if c == nil {
 		t.Fatal("New returned nil")
 	}
-	if c.token != "xoxp-token" {
-		t.Errorf("token: got %q, want xoxp-token", c.token)
+	if c.tokenFunc == nil {
+		t.Fatal("tokenFunc should be set")
+	}
+	if tok, err := c.tokenFunc(); err != nil || tok != "xoxp-token" {
+		t.Errorf("tokenFunc: got %q, %v; want xoxp-token, nil", tok, err)
 	}
 	if c.baseURL == "" {
 		t.Error("baseURL should be set")
@@ -109,13 +118,28 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestGet_TokenError(t *testing.T) {
+	// A tokenFunc failure (e.g. refresh token expired) must surface as an error
+	// instead of issuing an unauthenticated request.
+	wantErr := errors.New("refresh failed")
+	c := &Client{
+		tokenFunc:  func() (string, error) { return "", wantErr },
+		httpClient: http.DefaultClient,
+		baseURL:    "http://127.0.0.1:1", // must never be reached
+	}
+	_, err := c.History("C123", "1700000000.000000")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("want token error %v, got %v", wantErr, err)
+	}
+}
+
 func TestHistory_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "channel_not_found"})
 	}))
 	defer srv.Close()
 
-	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	c := &Client{tokenFunc: staticToken("xoxp-test"), httpClient: srv.Client(), baseURL: srv.URL}
 	_, err := c.History("C_MISSING", "1700000000.000000")
 	if err == nil {
 		t.Fatal("expected error for API error response")
@@ -131,7 +155,7 @@ func TestHistory_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	c := &Client{tokenFunc: staticToken("xoxp-test"), httpClient: srv.Client(), baseURL: srv.URL}
 	_, err := c.History("C123", "1700000000.000000")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
@@ -144,7 +168,7 @@ func TestReplies_APIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{token: "xoxp-test", httpClient: srv.Client(), baseURL: srv.URL}
+	c := &Client{tokenFunc: staticToken("xoxp-test"), httpClient: srv.Client(), baseURL: srv.URL}
 	_, err := c.Replies("C123", "1700000000.000000", "1700000001.000000")
 	if err == nil {
 		t.Fatal("expected error for API error response")
