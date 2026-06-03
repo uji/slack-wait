@@ -4,11 +4,83 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/99designs/keyring"
 )
+
+// ---- in-memory keyring for tests ----
+
+type memKeyring struct {
+	mu    sync.Mutex
+	items map[string]keyring.Item
+}
+
+func newMemKeyring() *memKeyring {
+	return &memKeyring{items: make(map[string]keyring.Item)}
+}
+
+func (m *memKeyring) Get(key string) (keyring.Item, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	item, ok := m.items[key]
+	if !ok {
+		return keyring.Item{}, keyring.ErrKeyNotFound
+	}
+	return item, nil
+}
+
+func (m *memKeyring) GetMetadata(key string) (keyring.Metadata, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.items[key]; !ok {
+		return keyring.Metadata{}, keyring.ErrKeyNotFound
+	}
+	return keyring.Metadata{}, nil
+}
+
+func (m *memKeyring) Set(item keyring.Item) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[item.Key] = item
+	return nil
+}
+
+func (m *memKeyring) Remove(key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.items[key]; !ok {
+		return keyring.ErrKeyNotFound
+	}
+	delete(m.items, key)
+	return nil
+}
+
+func (m *memKeyring) Keys() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keys := make([]string, 0, len(m.items))
+	for k := range m.items {
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// ---- test helpers ----
+
+// isolateConfigDir wires up a fresh in-memory keyring for each test and
+// returns it so callers can inspect raw contents.
+func isolateConfigDir(t *testing.T) *memKeyring {
+	t.Helper()
+	ring := newMemKeyring()
+	orig := keyringOpen
+	keyringOpen = func() (keyring.Keyring, error) { return ring, nil }
+	t.Cleanup(func() { keyringOpen = orig })
+	return ring
+}
 
 // ---- Token.Valid ----
 
@@ -51,13 +123,6 @@ func TestValid_EmptyAccessToken(t *testing.T) {
 }
 
 // ---- Save / Load / Delete ----
-
-func isolateConfigDir(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", dir)
-}
 
 func TestSaveLoad_Rotating(t *testing.T) {
 	isolateConfigDir(t)
@@ -108,8 +173,8 @@ func TestSaveLoad_NonRotating(t *testing.T) {
 	}
 }
 
-func TestSaveDoesNotWriteAccessToken(t *testing.T) {
-	isolateConfigDir(t)
+func TestSaveDoesNotStoreAccessToken(t *testing.T) {
+	ring := isolateConfigDir(t)
 
 	if err := Save(&Token{
 		AccessToken:  "xoxp-secret",
@@ -119,16 +184,12 @@ func TestSaveDoesNotWriteAccessToken(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	p, err := tokenPath()
+	item, err := ring.Get(keyringKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "xoxp-secret") {
-		t.Errorf("access token must not be written to disk; file contents: %s", raw)
+	if strings.Contains(string(item.Data), "xoxp-secret") {
+		t.Errorf("access token must not be stored in keyring; data: %s", item.Data)
 	}
 }
 
@@ -141,7 +202,7 @@ func TestLoad_Missing(t *testing.T) {
 	}
 }
 
-func TestDelete_RemovesFile(t *testing.T) {
+func TestDelete_RemovesEntry(t *testing.T) {
 	isolateConfigDir(t)
 
 	if err := Save(&Token{AccessToken: "xoxp-test"}); err != nil {
@@ -159,9 +220,9 @@ func TestDelete_RemovesFile(t *testing.T) {
 func TestDelete_Idempotent(t *testing.T) {
 	isolateConfigDir(t)
 
-	// Deleting a non-existent file should not return an error.
+	// Deleting a non-existent entry should not return an error.
 	if err := Delete(); err != nil {
-		t.Fatalf("Delete on missing file: %v", err)
+		t.Fatalf("Delete on missing entry: %v", err)
 	}
 }
 
@@ -405,7 +466,7 @@ func TestSession_RefreshesExpired(t *testing.T) {
 func TestSession_RefreshesWhenAccessTokenEmpty(t *testing.T) {
 	isolateConfigDir(t)
 
-	// Simulate a fresh start: only the refresh token is on disk.
+	// Simulate a fresh start: only the refresh token is in the keyring.
 	if err := Save(&Token{
 		AccessToken:  "xoxp-not-persisted",
 		RefreshToken: "xoxe-rt",

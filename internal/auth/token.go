@@ -7,27 +7,27 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/99designs/keyring"
 )
 
 // Token holds the Slack OAuth credentials. The access token and its expiry are
 // kept in process memory only; see persisted for what is actually written to
-// disk.
+// the keyring.
 type Token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
-// persisted is the on-disk representation of a Token.
+// persisted is the keyring representation of a Token.
 //
 // For rotating apps (token_rotation_enabled) the short-lived access token is
-// deliberately NOT written to disk: it lives only in process memory and is
-// recreated from the refresh token on the next run. Only the long-lived,
-// rotating refresh token is persisted.
+// deliberately NOT stored: it lives only in process memory and is recreated
+// from the refresh token on the next run. Only the long-lived, rotating
+// refresh token is persisted.
 //
 // For non-rotating apps there is no refresh token and the access token never
 // expires, so it is the only credential available and must be stored.
@@ -41,68 +41,65 @@ var (
 	ErrTokenExpired = errors.New("refresh token expired; run 'slack-wait login'")
 )
 
-func tokenPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "slack-wait", "token.json"), nil
+const (
+	keyringService = "slack-wait"
+	keyringKey     = "token"
+)
+
+// keyringOpen is the factory used to obtain the keyring; replaced in tests.
+var keyringOpen = func() (keyring.Keyring, error) {
+	return keyring.Open(keyring.Config{
+		ServiceName:              keyringService,
+		KeychainTrustApplication: true,
+	})
 }
 
 func Load() (*Token, error) {
-	p, err := tokenPath()
+	ring, err := keyringOpen()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("keyring: %w", err)
 	}
-	f, err := os.Open(p)
-	if errors.Is(err, os.ErrNotExist) {
+	item, err := ring.Get(keyringKey)
+	if errors.Is(err, keyring.ErrKeyNotFound) {
 		return nil, ErrNoToken
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("keyring get: %w", err)
 	}
-	defer f.Close()
-	var p2 persisted
-	if err := json.NewDecoder(f).Decode(&p2); err != nil {
-		return nil, fmt.Errorf("corrupt token file: %w", err)
+	var p persisted
+	if err := json.Unmarshal(item.Data, &p); err != nil {
+		return nil, fmt.Errorf("corrupt keyring entry: %w", err)
 	}
-	// ExpiresAt is intentionally left zero: it describes the in-memory access
-	// token, which is never persisted for rotating apps. A loaded rotating
-	// token therefore has an empty AccessToken and is refreshed on first use.
-	return &Token{AccessToken: p2.AccessToken, RefreshToken: p2.RefreshToken}, nil
+	return &Token{AccessToken: p.AccessToken, RefreshToken: p.RefreshToken}, nil
 }
 
 func Save(t *Token) error {
-	p, err := tokenPath()
+	ring, err := keyringOpen()
 	if err != nil {
-		return err
+		return fmt.Errorf("keyring: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-		return err
-	}
-	// Keep the access token out of the file for rotating apps; persist it only
-	// when there is no refresh token (non-rotating app), where it is the sole
-	// credential.
 	pt := persisted{RefreshToken: t.RefreshToken}
 	if t.RefreshToken == "" {
 		pt.AccessToken = t.AccessToken
 	}
-	// 0600: owner read/write only
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	data, err := json.Marshal(pt)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(pt)
+	return ring.Set(keyring.Item{
+		Key:   keyringKey,
+		Data:  data,
+		Label: "slack-wait Slack token",
+	})
 }
 
 func Delete() error {
-	p, err := tokenPath()
+	ring, err := keyringOpen()
 	if err != nil {
-		return err
+		return fmt.Errorf("keyring: %w", err)
 	}
-	err = os.Remove(p)
-	if errors.Is(err, os.ErrNotExist) {
+	err = ring.Remove(keyringKey)
+	if errors.Is(err, keyring.ErrKeyNotFound) {
 		return nil
 	}
 	return err
@@ -199,9 +196,9 @@ func callTokenEndpoint(params url.Values) (*Token, error) {
 }
 
 // Session keeps the active token in process memory and refreshes it on demand.
-// The access token never touches disk for rotating apps; only the rotating
-// refresh token is persisted, so a long-running `wait` can keep refreshing the
-// access token transparently while it waits.
+// The access token never touches the keyring for rotating apps; only the
+// rotating refresh token is persisted, so a long-running `wait` can keep
+// refreshing the access token transparently while it waits.
 type Session struct {
 	clientID string
 	mu       sync.Mutex
