@@ -2,6 +2,7 @@ package slack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,11 @@ import (
 	"slices"
 	"time"
 )
+
+// ErrTokenExpired is returned when the Slack API rejects the access token as
+// expired or revoked. The long-running caller should not retry; the user must
+// re-authenticate with 'slack-wait login'.
+var ErrTokenExpired = errors.New("token expired; run 'slack-wait login'")
 
 // Client wraps Slack Web API calls with a user token.
 //
@@ -61,6 +67,9 @@ func (c *Client) get(method string, params url.Values) ([]json.RawMessage, error
 		return nil, fmt.Errorf("parse %s response: %w", method, err)
 	}
 	if !r.OK {
+		if r.Error == "token_expired" || r.Error == "token_revoked" {
+			return nil, fmt.Errorf("%s: %w", method, ErrTokenExpired)
+		}
 		return nil, fmt.Errorf("%s: %s", method, r.Error)
 	}
 	return r.Messages, nil

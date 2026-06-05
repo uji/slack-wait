@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uji/slack-wait/internal/auth"
+	"github.com/uji/slack-wait/internal/slack"
 )
 
 // shortIntervals reduces real-time waits in tests.
@@ -178,6 +182,33 @@ func TestPollLoop_FirstPollError_ThenSuccess(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "first poll error") {
 		t.Error("first poll error should appear in stderr")
+	}
+}
+
+// ---- Fatal auth errors exit immediately without waiting for timeout ----
+
+func TestPollLoop_TokenExpired_ExitsImmediately(t *testing.T) {
+	for _, fatalErr := range []error{
+		fmt.Errorf("conversations.history: %w", slack.ErrTokenExpired),
+		auth.ErrTokenExpired,
+	} {
+		t.Run(fatalErr.Error(), func(t *testing.T) {
+			calls := 0
+			fetch := func() ([]json.RawMessage, error) {
+				calls++
+				return nil, fatalErr
+			}
+
+			var errOut bytes.Buffer
+			code := pollLoop(fetch, testInterval, testTimeout, io.Discard, &errOut)
+
+			if code != 1 {
+				t.Fatalf("exit code: got %d, want 1", code)
+			}
+			if calls > 2 {
+				t.Errorf("fetch called %d times; want at most 2 (should stop retrying)", calls)
+			}
+		})
 	}
 }
 

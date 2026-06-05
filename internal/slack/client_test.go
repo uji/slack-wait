@@ -177,3 +177,20 @@ func TestReplies_APIError(t *testing.T) {
 		t.Errorf("error should mention thread_not_found; got %v", err)
 	}
 }
+
+func TestHistory_TokenExpired(t *testing.T) {
+	for _, apiErr := range []string{"token_expired", "token_revoked"} {
+		t.Run(apiErr, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": apiErr})
+			}))
+			defer srv.Close()
+
+			c := &Client{tokenFunc: staticToken("xoxp-test"), httpClient: srv.Client(), baseURL: srv.URL}
+			_, err := c.History("C123", "1700000000.000000")
+			if !errors.Is(err, ErrTokenExpired) {
+				t.Fatalf("want ErrTokenExpired, got %v", err)
+			}
+		})
+	}
+}

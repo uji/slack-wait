@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -127,9 +128,16 @@ func pollLoop(
 		}
 	}
 
+	isFatal := func(err error) bool {
+		return errors.Is(err, slack.ErrTokenExpired) || errors.Is(err, auth.ErrTokenExpired)
+	}
+
 	// Immediate first poll: avoid waiting a full interval when messages are ready.
 	if msgs, err := fetch(); err != nil {
 		fmt.Fprintf(stderr, "slack-wait: %v\n", err)
+		if isFatal(err) {
+			return 1
+		}
 	} else if len(msgs) > 0 {
 		emit(msgs)
 		return 0
@@ -151,6 +159,9 @@ func pollLoop(
 			msgs, err := fetch()
 			if err != nil {
 				fmt.Fprintf(stderr, "slack-wait: %v\n", err)
+				if isFatal(err) {
+					return 1
+				}
 				continue
 			}
 			if len(msgs) > 0 {
